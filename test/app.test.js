@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, request as httpRequest } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApp } from '../lib/app.js';
@@ -37,6 +37,12 @@ class MemoryStore {
   }
   async createSession(session) { this.sessions.set(session.tokenHash, session); }
   async deleteSession(tokenHash) { this.sessions.delete(tokenHash); }
+  async deleteSessions(tokenHashes) {
+    this.deleteBatchCalls = (this.deleteBatchCalls ?? 0) + 1;
+    let deleted = 0;
+    for (const tokenHash of tokenHashes) if (this.sessions.delete(tokenHash)) deleted += 1;
+    return deleted;
+  }
   async finishOnboarding(id) { const user = this.users.get(id); user.onboarded = true; return this.publicUser(user); }
   async list(userId) { return [...this.tasks.values()].filter((item) => item.userId === userId).map(({ userId: _, ...task }) => ({ ...task })); }
   async get(userId, id) { const item = this.tasks.get(id); if (!item || item.userId !== userId) return null; const { userId: _, ...task } = item; return { ...task }; }
@@ -144,7 +150,7 @@ test('signup, onboarding, signout and login create secure, revocable sessions', 
   assert.equal(res.status, 409);
   res = await fetch(app.url + '/api/auth/logout', json('POST', {}, cookie));
   assert.equal(res.status, 204);
-  assert.match(res.headers.get('set-cookie'), /Max-Age=0/);
+  assert.equal(res.headers.get('set-cookie'), null, 'a delayed logout must not overwrite a newer login cookie');
   assert.equal((await fetch(app.url + '/api/auth/me', { headers: { cookie } })).status, 401);
   res = await fetch(app.url + '/api/auth/login', json('POST', { email: 'mira@example.com', password: 'wrong' }));
   assert.equal(res.status, 401);
@@ -188,6 +194,8 @@ test('validates account and task inputs, media types and body limits', async (t)
   const app = await fixture(t);
   let res = await fetch(app.url + '/api/auth/signup', json('POST', { name: 'A', email: 'invalid', password: 'short' }));
   assert.equal(res.status, 400);
+  res = await fetch(app.url + '/api/auth/signup', json('POST', { name: 'A', email: 'a\u0000@example.com', password: 'a very long password' }));
+  assert.equal(res.status, 400, 'control characters in email must be rejected before reaching PostgreSQL');
   const a = await signup(app);
   const badTasks = [
     {}, { title: '   ' }, { title: 'x'.repeat(201) }, { title: 'two\nlines' },
@@ -219,14 +227,165 @@ test('rejects cross-origin mutations and rate-limits authentication', async (t) 
   assert.equal(res.status, 403);
   res = await fetch(app.url + '/api/tasks', json('POST', { title: 'Allowed' }, a.cookie, { origin: app.url }));
   assert.equal(res.status, 201);
-  // Signup above counts as one attempt. Bad requests count as well.
-  for (let i = 0; i < 9; i++) {
+  // Signup above counts as one source attempt. Bad requests count as well.
+  for (let i = 0; i < 29; i++) {
     res = await fetch(app.url + '/api/auth/login', json('POST', {}));
     assert.equal(res.status, 400);
   }
   res = await fetch(app.url + '/api/auth/login', json('POST', {}));
   assert.equal(res.status, 429);
   assert.ok(Number(res.headers.get('retry-after')) > 0);
+});
+
+test('rejects ambiguous session cookies and revokes every presented token on logout', async (t) => {
+  const app = await fixture(t);
+  const a = await signup(app, 'A', 'duplicate-a@example.com');
+  const b = await signup(app, 'B', 'duplicate-b@example.com');
+  const ambiguous = `${a.cookie}; ${b.cookie}`;
+  assert.equal((await fetch(app.url + '/api/auth/me', { headers: { cookie: ambiguous } })).status, 401);
+  assert.equal((await fetch(app.url + '/api/auth/logout', json('POST', {}, ambiguous, { 'x-hype-user': a.user.id }))).status, 401);
+  assert.equal((await fetch(app.url + '/api/auth/me', { headers: { cookie: a.cookie } })).status, 200);
+  assert.equal((await fetch(app.url + '/api/auth/me', { headers: { cookie: b.cookie } })).status, 200);
+  assert.equal((await fetch(app.url + '/api/auth/logout', json('POST', {}, ambiguous))).status, 204);
+  assert.equal(app.store.deleteBatchCalls, 1, 'logout revokes presented tokens in one operation');
+  assert.equal((await fetch(app.url + '/api/auth/me', { headers: { cookie: a.cookie } })).status, 401);
+  assert.equal((await fetch(app.url + '/api/auth/me', { headers: { cookie: b.cookie } })).status, 401);
+});
+
+test('a delayed logout cannot overwrite a newer login cookie', async (t) => {
+  const app = await fixture(t);
+  const a = await signup(app, 'A', 'logout-a@example.com');
+  await signup(app, 'B', 'logout-b@example.com');
+  const originalDelete = app.store.deleteSessions.bind(app.store);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let markStarted;
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  app.store.deleteSessions = async (tokens) => { markStarted(); await gate; return originalDelete(tokens); };
+  const logout = fetch(app.url + '/api/auth/logout', json('POST', {}, a.cookie, { 'x-hype-user': a.user.id }));
+  await started;
+  let login;
+  try {
+    login = await fetch(app.url + '/api/auth/login', json('POST', { email: 'logout-b@example.com', password: 'correct horse battery' }));
+    assert.equal(login.status, 200);
+  } finally { release(); }
+  const logoutResponse = await logout;
+  assert.equal(logoutResponse.status, 204);
+  assert.equal(logoutResponse.headers.get('set-cookie'), null);
+  const newCookie = login.headers.get('set-cookie').split(';')[0];
+  assert.equal((await fetch(app.url + '/api/auth/me', { headers: { cookie: newCookie } })).status, 200);
+});
+
+test('revokes many presented tokens with one bounded batch', async (t) => {
+  const app = await fixture(t);
+  const cookie = Array.from({ length: 180 }, () => `hype_session=${randomBytes(32).toString('base64url')}`).join('; ');
+  const res = await fetch(app.url + '/api/auth/logout', json('POST', {}, cookie));
+  assert.equal(res.status, 204);
+  assert.equal(app.store.deleteBatchCalls, 1);
+});
+
+test('binds workspace writes and onboarding to the expected signed-in account', async (t) => {
+  const app = await fixture(t);
+  const a = await signup(app, 'A', 'expected-a@example.com');
+  const b = await signup(app, 'B', 'expected-b@example.com');
+  const mismatch = { 'x-hype-user': a.user.id };
+  let res = await fetch(app.url + '/api/tasks', json('POST', { title: 'Must not be written' }, b.cookie, mismatch));
+  assert.equal(res.status, 409);
+  assert.equal((await res.json()).code, 'ACCOUNT_CHANGED');
+  assert.deepEqual(await (await fetch(app.url + '/api/tasks', { headers: { cookie: b.cookie } })).json(), []);
+  res = await fetch(app.url + '/api/auth/onboarding', json('POST', {}, b.cookie, mismatch));
+  assert.equal(res.status, 409);
+  assert.equal((await (await fetch(app.url + '/api/auth/me', { headers: { cookie: b.cookie } })).json()).user.onboarded, false);
+  res = await fetch(app.url + '/api/auth/logout', json('POST', {}, b.cookie, mismatch));
+  assert.equal(res.status, 409);
+  assert.equal((await fetch(app.url + '/api/auth/me', { headers: { cookie: b.cookie } })).status, 200);
+  res = await fetch(app.url + '/api/tasks', json('POST', { title: 'Correct account' }, b.cookie, { 'x-hype-user': b.user.id }));
+  assert.equal(res.status, 201);
+});
+
+test('stops oversized chunked uploads without waiting for the sender to finish', async (t) => {
+  const app = await fixture(t);
+  const a = await signup(app);
+  const target = new URL(app.url);
+  const status = await new Promise((resolve, reject) => {
+    let settled = false;
+    const request = httpRequest({ hostname: target.hostname, port: target.port, path: '/api/tasks', method: 'POST', headers: { cookie: a.cookie, 'content-type': 'application/json', 'transfer-encoding': 'chunked' } }, (response) => {
+      response.resume();
+      response.on('end', () => { settled = true; clearTimeout(timer); resolve(response.statusCode); request.destroy(); });
+    });
+    const timer = setTimeout(() => { request.destroy(); reject(new Error('server waited for an oversized upload to finish')); }, 5000);
+    request.on('error', (error) => { if (!settled) { clearTimeout(timer); reject(error); } });
+    request.write('{"title":"' + 'x'.repeat(33_000)); // deliberately do not end the request
+  });
+  assert.equal(status, 413);
+});
+
+test('closes unread streams when authentication rejects a write', async (t) => {
+  const app = await fixture(t);
+  const target = new URL(app.url);
+  const result = await new Promise((resolve, reject) => {
+    let settled = false;
+    const request = httpRequest({ hostname: target.hostname, port: target.port, path: '/api/tasks', method: 'POST', headers: { 'content-type': 'application/json', 'transfer-encoding': 'chunked' } }, (response) => {
+      response.resume();
+      response.on('end', () => { settled = true; clearTimeout(timer); resolve({ status: response.statusCode, connection: response.headers.connection }); request.destroy(); });
+    });
+    const timer = setTimeout(() => { request.destroy(); reject(new Error('server did not respond to an unauthenticated upload')); }, 5000);
+    request.on('error', (error) => { if (!settled) { clearTimeout(timer); reject(error); } });
+    request.write('{"title":"' + 'x'.repeat(4096));
+  });
+  assert.equal(result.status, 401);
+  assert.equal(result.connection, 'close');
+});
+
+test('limits password attempts by normalized account as well as source', async (t) => {
+  const app = await fixture(t);
+  for (let i = 0; i < 10; i++) {
+    const response = await fetch(app.url + '/api/auth/login', json('POST', { email: i % 2 ? 'GUESSED@example.com' : 'guessed@example.com', password: 'incorrect' }));
+    assert.equal(response.status, 401);
+  }
+  const response = await fetch(app.url + '/api/auth/login', json('POST', { email: 'guessed@example.com', password: 'incorrect' }));
+  assert.equal(response.status, 429);
+  assert.ok(Number(response.headers.get('retry-after')) > 0);
+});
+
+test('bounds simultaneous password hashing work', async (t) => {
+  const app = await fixture(t);
+  const responses = await Promise.all(Array.from({ length: 12 }, (_, i) =>
+    fetch(app.url + '/api/auth/login', json('POST', { email: `parallel-${i}@example.com`, password: 'incorrect' }))));
+  assert.ok(responses.some((response) => response.status === 429), 'excess concurrent KDFs must be rejected');
+  assert.ok(responses.some((response) => response.status === 401), 'permitted attempts still verify normally');
+  assert.ok(responses.every((response) => [401, 429].includes(response.status)));
+});
+
+test('KDF capacity rejections do not exhaust an account quota', async (t) => {
+  const app = await fixture(t);
+  const originalFind = app.store.findUserByEmail.bind(app.store);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let allReady;
+  const ready = new Promise((resolve) => { allReady = resolve; });
+  let waiting = 0;
+  app.store.findUserByEmail = async (email) => {
+    if (email.startsWith('block-')) {
+      waiting += 1;
+      if (waiting === 4) allReady();
+      await gate;
+    }
+    return originalFind(email);
+  };
+  const blockers = Array.from({ length: 4 }, (_, i) => fetch(app.url + '/api/auth/login', json('POST', { email: `block-${i}@example.com`, password: 'incorrect' })));
+  await ready;
+  try {
+    for (let i = 0; i < 10; i++) {
+      const res = await fetch(app.url + '/api/auth/login', json('POST', { email: 'victim@example.com', password: 'incorrect' }));
+      assert.equal(res.status, 429);
+    }
+  } finally {
+    release();
+  }
+  await Promise.all(blockers);
+  const res = await fetch(app.url + '/api/auth/login', json('POST', { email: 'victim@example.com', password: 'incorrect' }));
+  assert.equal(res.status, 401, 'busy responses must not consume the account attempt budget');
 });
 
 test('the rate limiter resets windows and separates addresses', () => {

@@ -19,6 +19,9 @@ const pool = new pg.Pool({
   max: 10,
   connectionTimeoutMillis: 10_000,
 });
+// pg emits errors for idle pooled clients. Handle them instead of allowing an
+// unhandled EventEmitter error to terminate the entire Node process.
+pool.on('error', (error) => console.error('An idle PostgreSQL connection failed:', error.message));
 let store;
 try {
   store = await createStore(pool);

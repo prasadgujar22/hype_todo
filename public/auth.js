@@ -154,6 +154,21 @@ const AUTH_MARKUP = `
   </div>
 `;
 
+const AUTH_CHANGE_KEY = 'hype:auth-change';
+let authSignalSequence = 0;
+
+// Only a fresh, non-secret marker is shared. Never put account or task data in storage.
+function notifyOtherTabs() {
+  try {
+    const nonce = typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : Math.random().toString(36).slice(2);
+    window.localStorage.setItem(AUTH_CHANGE_KEY, `${nonce}-${++authSignalSequence}`);
+  } catch {
+    // Storage may be blocked; focus/visibility session checks still provide a fallback.
+  }
+}
+
 class AuthRequestError extends Error {
   constructor(kind, status = 0, detail = '') {
     super(detail || kind);
@@ -163,7 +178,7 @@ class AuthRequestError extends Error {
   }
 }
 
-async function request(path, { method = 'GET', body } = {}) {
+async function request(path, { method = 'GET', body, expectedUserId } = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
   const options = {
@@ -173,6 +188,7 @@ async function request(path, { method = 'GET', body } = {}) {
     signal: controller.signal,
     headers: { Accept: 'application/json' },
   };
+  if (expectedUserId !== undefined) options.headers['X-Hype-User'] = expectedUserId;
   if (method === 'POST') {
     options.headers['Content-Type'] = 'application/json';
     options.body = JSON.stringify(body ?? {});
@@ -180,6 +196,11 @@ async function request(path, { method = 'GET', body } = {}) {
 
   try {
     const response = await fetch(path, options);
+    // The cookie has changed once a successful response arrives, even if its body
+    // later fails to parse. Notify before reading the body, and only for auth changes.
+    if (response.ok && method === 'POST' && ['/api/auth/signup', '/api/auth/login', '/api/auth/logout'].includes(path)) {
+      notifyOtherTabs();
+    }
     // The status alone is authoritative, even if its optional body is absent.
     // Cancel the unneeded stream so a stalled body cannot hold the UI or socket open.
     if (response.status === 401) {
@@ -197,6 +218,10 @@ async function request(path, { method = 'GET', body } = {}) {
       }
     }
     if (!response.ok) {
+      if (expectedUserId !== undefined && response.status === 409 && payload?.code === 'ACCOUNT_CHANGED') {
+        reloadForAccountChange();
+        throw new AuthRequestError('account-changed', 409);
+      }
       const detail = typeof payload?.error === 'string' ? payload.error : '';
       throw new AuthRequestError('http', response.status, detail);
     }
@@ -209,10 +234,14 @@ async function request(path, { method = 'GET', body } = {}) {
   }
 }
 
+function hasUserId(user) {
+  return user !== null && typeof user === 'object' && !Array.isArray(user)
+    && typeof user.id === 'string' && user.id.trim().length > 0;
+}
+
 function readUser(payload) {
   const user = payload?.user;
-  if (!user || typeof user !== 'object' || Array.isArray(user) ||
-      typeof user.name !== 'string' || !user.name.trim() || typeof user.onboarded !== 'boolean') {
+  if (!hasUserId(user) || typeof user.name !== 'string' || !user.name.trim() || typeof user.onboarded !== 'boolean') {
     throw new AuthRequestError('invalid');
   }
   return user;
@@ -234,9 +263,127 @@ function errorMessage(error, action) {
 
 let authPromise = null;
 let signOutHandlerInstalled = false;
+let sessionObserversInstalled = false;
 let signingOut = false;
 let signedInUser = null;
 let userNameObserver = null;
+let authReloadPending = false;
+let authSignalVersion = 0;
+let sessionCheckInFlight = false;
+let sessionCheckTimer = null;
+let sessionActivityVersion = 0;
+let sessionCheckVersion = 0;
+let sessionCheckAgain = false;
+const sessionInvalidationCallbacks = new Set();
+
+export function isAuthReloadPending() {
+  return authReloadPending;
+}
+
+// The dashboard uses this to discard task state and cancel requests before reload.
+export function onSessionInvalidated(callback) {
+  if (authReloadPending) callback();
+  else sessionInvalidationCallbacks.add(callback);
+}
+
+export function reloadForAccountChange() {
+  if (authReloadPending) return;
+  authReloadPending = true;
+  if (sessionCheckTimer !== null) {
+    clearTimeout(sessionCheckTimer);
+    sessionCheckTimer = null;
+  }
+  signedInUser = null;
+
+  // Gate the whole workspace, including native dialogs, before doing any async work.
+  document.body.classList.add('auth-pending');
+  const shell = document.querySelector('.app-shell');
+  if (shell) shell.hidden = true;
+  const root = document.getElementById('auth-root');
+  if (root) {
+    root.querySelectorAll('[data-ha-screen]').forEach((screen) => {
+      screen.hidden = screen.dataset.haScreen !== 'loading';
+    });
+    const overlay = root.querySelector('[data-ha-overlay]');
+    if (overlay) overlay.hidden = false;
+    const loadingMessage = root.querySelector('[data-ha-screen="loading"] .ha-intro');
+    if (loadingMessage) loadingMessage.textContent = 'Refreshing your account.';
+    const toast = root.querySelector('[data-ha-toast]');
+    if (toast) toast.hidden = true;
+    root.querySelectorAll('input[name="password"]').forEach((input) => { input.value = ''; });
+  }
+  document.querySelectorAll('[data-user-name]').forEach((element) => { element.textContent = ''; });
+  document.querySelectorAll('dialog[open]').forEach((dialog) => {
+    dialog.hidden = true;
+    try { dialog.close(); } catch { dialog.removeAttribute('open'); }
+  });
+  for (const callback of sessionInvalidationCallbacks) {
+    try { callback(); } catch { /* The workspace is already hidden; still reload. */ }
+  }
+  window.location.reload();
+}
+
+async function recheckSession() {
+  if (authReloadPending || signingOut || !signedInUser || sessionCheckInFlight) return;
+  sessionCheckInFlight = true;
+  sessionCheckVersion = sessionActivityVersion;
+  const expectedUserId = signedInUser.id;
+  try {
+    const payload = await request('/api/auth/me');
+    if (authReloadPending || signingOut || sessionCheckAgain || signedInUser?.id !== expectedUserId) return;
+    if (!hasUserId(payload?.user) || payload.user.id !== expectedUserId) reloadForAccountChange();
+  } catch (error) {
+    // Only an authoritative missing session causes a reload. Network/server errors
+    // leave the existing workspace alone, with no misleading alert.
+    if (!authReloadPending && !signingOut && !sessionCheckAgain && signedInUser?.id === expectedUserId && error.status === 401) {
+      reloadForAccountChange();
+    }
+  } finally {
+    sessionCheckInFlight = false;
+    if (sessionCheckAgain) {
+      sessionCheckAgain = false;
+      scheduleSessionRecheck();
+    }
+  }
+}
+
+function scheduleSessionRecheck() {
+  if (authReloadPending || signingOut || !signedInUser) return;
+  if (sessionCheckInFlight) {
+    // A genuinely new return while a check is in flight needs one more check;
+    // the focus/visibility pair for the same return does not.
+    if (sessionActivityVersion !== sessionCheckVersion) sessionCheckAgain = true;
+    return;
+  }
+  if (sessionCheckTimer !== null) return;
+  // A focus and a visibility event often arrive together. Coalesce them and keep
+  // only one /me request in flight.
+  sessionCheckTimer = setTimeout(() => {
+    sessionCheckTimer = null;
+    void recheckSession();
+  }, 0);
+}
+
+function installSessionObservers() {
+  if (sessionObserversInstalled) return;
+  sessionObserversInstalled = true;
+  window.addEventListener('storage', (event) => {
+    if (event.key !== AUTH_CHANGE_KEY || typeof event.newValue !== 'string' || !event.newValue) return;
+    try {
+      if (event.storageArea !== window.localStorage) return;
+    } catch {
+      return;
+    }
+    authSignalVersion += 1;
+    if (signedInUser) reloadForAccountChange();
+  });
+  window.addEventListener('blur', () => { sessionActivityVersion += 1; });
+  window.addEventListener('focus', scheduleSessionRecheck);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) sessionActivityVersion += 1;
+    else scheduleSessionRecheck();
+  });
+}
 
 function setUserNames(user) {
   signedInUser = user;
@@ -276,7 +423,8 @@ function installSignOutHandler(root) {
     const trigger = target?.closest('[data-sign-out]');
     if (!trigger) return;
     event.preventDefault();
-    if (signingOut || trigger.getAttribute('aria-disabled') === 'true' || trigger.disabled) return;
+    if (signingOut || authReloadPending || !signedInUser || trigger.getAttribute('aria-disabled') === 'true' || trigger.disabled) return;
+    const expectedUserId = signedInUser.id;
 
     signingOut = true;
     root.querySelector('[data-ha-toast]').hidden = true;
@@ -294,20 +442,23 @@ function installSignOutHandler(root) {
     });
 
     try {
-      await request('/api/auth/logout', { method: 'POST', body: {} });
-      window.location.reload();
+      await request('/api/auth/logout', { method: 'POST', body: {}, expectedUserId });
+      if (!authReloadPending) reloadForAccountChange();
     } catch (error) {
-      showToast(root, errorMessage(error, 'logout'));
+      if (!authReloadPending && error.status === 401) reloadForAccountChange();
+      else if (!authReloadPending) showToast(root, errorMessage(error, 'logout'));
     } finally {
-      controls.forEach(({ element, disabled, ariaDisabled, ariaBusy }) => {
-        if (disabled !== undefined) element.disabled = disabled;
-        if (ariaDisabled === null) element.removeAttribute('aria-disabled');
-        else element.setAttribute('aria-disabled', ariaDisabled);
-        if (ariaBusy === null) element.removeAttribute('aria-busy');
-        else element.setAttribute('aria-busy', ariaBusy);
-      });
-      root.querySelector('[data-ha-logout-status]').textContent = '';
-      signingOut = false;
+      if (!authReloadPending) {
+        controls.forEach(({ element, disabled, ariaDisabled, ariaBusy }) => {
+          if (disabled !== undefined) element.disabled = disabled;
+          if (ariaDisabled === null) element.removeAttribute('aria-disabled');
+          else element.setAttribute('aria-disabled', ariaDisabled);
+          if (ariaBusy === null) element.removeAttribute('aria-busy');
+          else element.setAttribute('aria-busy', ariaBusy);
+        });
+        root.querySelector('[data-ha-logout-status]').textContent = '';
+        signingOut = false;
+      }
     }
   });
 }
@@ -325,6 +476,7 @@ export async function initAuth() {
   // This is static, trusted markup only. User/server text is always set with textContent.
   root.innerHTML = AUTH_MARKUP;
   installSignOutHandler(root);
+  installSessionObservers();
 
   authPromise = new Promise((resolve) => {
     const overlay = root.querySelector('[data-ha-overlay]');
@@ -333,6 +485,8 @@ export async function initAuth() {
     const loginForm = root.querySelector('[data-ha-form="login"]');
     const onboardingForm = root.querySelector('[data-ha-onboarding-form]');
     let formBusy = false;
+    let checkingSession = false;
+    let checkSessionAgain = false;
 
     function focus(element, preventScroll = false) {
       if (element) element.focus({ preventScroll });
@@ -354,6 +508,7 @@ export async function initAuth() {
     }
 
     function finish(user) {
+      if (authReloadPending) return;
       clearPasswords();
       setUserNames(user);
       overlay.hidden = true;
@@ -362,6 +517,7 @@ export async function initAuth() {
     }
 
     function acceptUser(user) {
+      if (authReloadPending) return;
       clearPasswords();
       setUserNames(user);
       if (user.onboarded === false) {
@@ -445,7 +601,7 @@ export async function initAuth() {
     }
 
     async function submitCredentials(form, mode) {
-      if (formBusy) return;
+      if (formBusy || authReloadPending) return;
       const data = validate(form, mode);
       if (!data) return;
       formBusy = true;
@@ -453,26 +609,52 @@ export async function initAuth() {
       setBusy(form, true, signup ? 'Create account' : 'Sign in', signup ? 'Creating your account…' : 'Signing you in…');
       root.querySelectorAll('[data-ha-mode]').forEach((button) => { button.disabled = true; });
       let failed = false;
+      const signalVersion = authSignalVersion;
       try {
         const payload = await request(`/api/auth/${mode}`, { method: 'POST', body: data });
+        if (authReloadPending) return;
+        if (signalVersion !== authSignalVersion) {
+          reloadForAccountChange();
+          return;
+        }
         acceptUser(readUser(payload));
       } catch (error) {
+        if (authReloadPending) return;
+        if (signalVersion !== authSignalVersion) {
+          reloadForAccountChange();
+          return;
+        }
         failed = true;
         setFormError(form, errorMessage(error, mode));
       } finally {
-        setBusy(form, false, signup ? 'Create account' : 'Sign in', signup ? 'Creating your account…' : 'Signing you in…');
-        root.querySelectorAll('[data-ha-mode]').forEach((button) => { button.disabled = false; });
-        formBusy = false;
-        if (failed) focus(form.querySelector('button[type="submit"]'));
+        if (!authReloadPending) {
+          setBusy(form, false, signup ? 'Create account' : 'Sign in', signup ? 'Creating your account…' : 'Signing you in…');
+          root.querySelectorAll('[data-ha-mode]').forEach((button) => { button.disabled = false; });
+          formBusy = false;
+          if (failed) focus(form.querySelector('button[type="submit"]'));
+        }
       }
     }
 
     async function checkSession() {
+      if (checkingSession || authReloadPending) return;
+      checkingSession = true;
+      const signalVersion = authSignalVersion;
       showScreen('loading');
       try {
         const payload = await request('/api/auth/me');
+        if (authReloadPending) return;
+        if (signalVersion !== authSignalVersion) {
+          checkSessionAgain = true;
+          return;
+        }
         acceptUser(readUser(payload));
       } catch (error) {
+        if (authReloadPending) return;
+        if (signalVersion !== authSignalVersion) {
+          checkSessionAgain = true;
+          return;
+        }
         if (error.status === 401) {
           setMode('signup', false);
           showScreen('auth');
@@ -483,6 +665,12 @@ export async function initAuth() {
             : 'We couldn’t check your account right now. Please try again in a moment.';
           showScreen('connection');
           focus(root.querySelector('[data-ha-connection-title]'), true);
+        }
+      } finally {
+        checkingSession = false;
+        if (checkSessionAgain && !authReloadPending) {
+          checkSessionAgain = false;
+          void checkSession();
         }
       }
     }
@@ -498,7 +686,12 @@ export async function initAuth() {
 
     onboardingForm.addEventListener('submit', async (event) => {
       event.preventDefault();
-      if (formBusy) return;
+      if (formBusy || authReloadPending) return;
+      const expectedUserId = signedInUser?.id;
+      if (!expectedUserId) {
+        reloadForAccountChange();
+        return;
+      }
       formBusy = true;
       const errorElement = root.querySelector('[data-ha-onboarding-error]');
       errorElement.hidden = true;
@@ -506,12 +699,20 @@ export async function initAuth() {
       setBusy(onboardingForm, true, 'Continue to your space', 'Getting your space ready…');
       let failed = false;
       try {
-        const payload = await request('/api/auth/onboarding', { method: 'POST', body: {} });
+        const payload = await request('/api/auth/onboarding', { method: 'POST', body: {}, expectedUserId });
+        if (authReloadPending) return;
         const user = readUser(payload);
+        if (user.id !== expectedUserId) {
+          reloadForAccountChange();
+          return;
+        }
         if (!user.onboarded) throw new AuthRequestError('invalid');
         finish(user);
       } catch (error) {
+        if (authReloadPending) return;
         if (error.status === 401) {
+          signedInUser = null;
+          document.querySelectorAll('[data-user-name]').forEach((element) => { element.textContent = ''; });
           clearPasswords();
           setMode('login', false);
           showScreen('auth');
@@ -523,9 +724,11 @@ export async function initAuth() {
           errorElement.hidden = false;
         }
       } finally {
-        setBusy(onboardingForm, false, 'Continue to your space', 'Getting your space ready…');
-        formBusy = false;
-        if (failed) focus(onboardingForm.querySelector('button[type="submit"]'));
+        if (!authReloadPending) {
+          setBusy(onboardingForm, false, 'Continue to your space', 'Getting your space ready…');
+          formBusy = false;
+          if (failed) focus(onboardingForm.querySelector('button[type="submit"]'));
+        }
       }
     });
 

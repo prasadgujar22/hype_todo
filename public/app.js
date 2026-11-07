@@ -1,7 +1,7 @@
-import { initAuth } from './auth.js';
+import { initAuth, isAuthReloadPending, onSessionInvalidated, reloadForAccountChange } from './auth.js';
 
 // Do not load account data until a verified session and onboarding are ready.
-await initAuth();
+const initializedUser = await initAuth();
 
 const PROJECTS = ['Personal', 'Work', 'Ideas'];
 const PRIORITIES = ['low', 'medium', 'high'];
@@ -91,6 +91,30 @@ const state = {
 
 let toastTimer;
 let toastActionHandler = null;
+const taskRequestControllers = new Set();
+
+onSessionInvalidated(() => {
+  for (const controller of taskRequestControllers) controller.abort();
+  taskRequestControllers.clear();
+  state.tasks = [];
+  state.pending.clear();
+  state.loadStatus = 'idle';
+  state.loadError = '';
+  state.query = '';
+  state.dialog = null;
+  state.deleteId = null;
+  state.deleteOpener = null;
+  ui.list.replaceChildren();
+  ui.taskForm.reset();
+  ui.quickForm.reset();
+  ui.search.value = '';
+  ui.deleteTaskName.textContent = '';
+  ui.resultsAnnouncement.textContent = '';
+  ui.toast.hidden = true;
+  ui.toastMessage.textContent = '';
+  clearTimeout(toastTimer);
+  toastActionHandler = null;
+});
 
 function localDateKey(date) {
   return `${String(date.getFullYear()).padStart(4, '0')}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -127,6 +151,7 @@ function formatDueDate(value) {
 }
 
 function updateClock() {
+  if (isAuthReloadPending()) return;
   const now = new Date();
   const newToday = localDateKey(now);
   const dayChanged = state.today !== newToday;
@@ -153,8 +178,10 @@ function isTask(task) {
 }
 
 class RequestError extends Error {}
+class SessionChangedError extends Error {}
 
 function renderSync() {
+  if (isAuthReloadPending()) return;
   if (state.requestCount > 0) {
     ui.syncDot.dataset.state = 'loading';
     ui.syncText.textContent = state.loadStatus === 'loading' ? 'Connecting' : 'Saving';
@@ -168,18 +195,27 @@ function renderSync() {
 }
 
 async function apiRequest(method, path, payload, validate) {
+  if (isAuthReloadPending()) throw new SessionChangedError();
   state.requestCount += 1;
   renderSync();
   const controller = new AbortController();
+  taskRequestControllers.add(controller);
   let timedOut = false;
   const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 25_000);
   try {
-    const options = { method, credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' }, signal: controller.signal };
+    const options = {
+      method,
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { Accept: 'application/json', 'X-Hype-User': initializedUser.id },
+      signal: controller.signal,
+    };
     if (payload !== undefined) {
       options.headers['Content-Type'] = 'application/json';
       options.body = JSON.stringify(payload);
     }
     const response = await fetch(path, options);
+    if (isAuthReloadPending()) throw new SessionChangedError();
     let data = null;
     if (response.status !== 204) {
       try {
@@ -188,7 +224,12 @@ async function apiRequest(method, path, payload, validate) {
         if (response.ok) throw new RequestError('The server returned an unexpected response. Please try again.');
       }
     }
+    if (isAuthReloadPending()) throw new SessionChangedError();
     if (!response.ok) {
+      if (response.status === 409 && data?.code === 'ACCOUNT_CHANGED') {
+        reloadForAccountChange();
+        throw new SessionChangedError();
+      }
       if (response.status === 401) throw new RequestError('Your session has ended. Reload the page to sign in again.');
       const message = typeof data?.error === 'string' && data.error.trim()
         ? data.error.trim().slice(0, 300)
@@ -199,6 +240,7 @@ async function apiRequest(method, path, payload, validate) {
     state.syncError = false;
     return data;
   } catch (error) {
+    if (isAuthReloadPending()) throw new SessionChangedError();
     state.syncError = true;
     if (timedOut) throw new RequestError('The request timed out. Refresh the page to check your list before retrying.');
     if (error instanceof RequestError) throw error;
@@ -207,21 +249,24 @@ async function apiRequest(method, path, payload, validate) {
       : 'Couldn’t connect. Refresh the page to check your list before retrying.');
   } finally {
     clearTimeout(timeout);
+    taskRequestControllers.delete(controller);
     state.requestCount -= 1;
     renderSync();
   }
 }
 
 async function loadTasks() {
-  if (state.loadStatus === 'loading') return;
+  if (isAuthReloadPending() || state.loadStatus === 'loading') return;
   state.loadStatus = 'loading';
   state.loadError = '';
   render();
   try {
     const tasks = await apiRequest('GET', '/api/tasks', undefined, (value) => Array.isArray(value) && value.every(isTask));
+    if (isAuthReloadPending()) return;
     state.tasks = tasks;
     state.loadStatus = 'ready';
   } catch (error) {
+    if (isAuthReloadPending()) return;
     state.loadError = error.message;
     state.loadStatus = 'error';
   }
@@ -510,7 +555,7 @@ function captureDialogOpener() {
 }
 
 function restoreDialogFocus(opener) {
-  if (ui.taskDialog.open || ui.deleteDialog.open) return;
+  if (isAuthReloadPending() || ui.taskDialog.open || ui.deleteDialog.open) return;
   const active = document.activeElement;
   // Native dialog focus restoration works in the usual case. A background
   // render can remove the original row while the modal is open; recover it.
@@ -614,6 +659,7 @@ function renderTaskList() {
 }
 
 function render() {
+  if (isAuthReloadPending()) return;
   renderOverview();
   renderFilters();
   renderControls();
@@ -671,6 +717,7 @@ function scheduleToastDismiss() {
 }
 
 function showToast(message, options = {}) {
+  if (isAuthReloadPending()) return;
   ui.toast.dataset.kind = options.error ? 'error' : 'success';
   ui.toastMessage.textContent = message;
   toastActionHandler = options.action || null;
@@ -761,16 +808,19 @@ async function submitQuickTask(event) {
   renderControls();
   try {
     const task = await apiRequest('POST', '/api/tasks', payload, isTask);
+    if (isAuthReloadPending()) return;
     replaceTask(task);
     if (ui.quickTitle.value === original) ui.quickTitle.value = '';
     render();
     showCreatedToast(task, 'added');
   } catch (error) {
-    setQuickError(error.message);
+    if (!isAuthReloadPending()) setQuickError(error.message);
   } finally {
     state.quickBusy = false;
-    renderControls();
-    if (hadFocus && document.activeElement === document.body && !ui.taskDialog.open && !ui.deleteDialog.open) ui.quickTitle.focus();
+    if (!isAuthReloadPending()) {
+      renderControls();
+      if (hadFocus && document.activeElement === document.body && !ui.taskDialog.open && !ui.deleteDialog.open) ui.quickTitle.focus();
+    }
   }
 }
 
@@ -813,6 +863,7 @@ async function submitTaskDialog(event) {
     const task = dialog.mode === 'edit'
       ? await apiRequest('PATCH', taskPath(dialog.id), payload, (value) => isTask(value) && value.id === dialog.id)
       : await apiRequest('POST', '/api/tasks', payload, isTask);
+    if (isAuthReloadPending()) return;
     replaceTask(task);
     if (dialog.fromQuick && ui.quickTitle.value === dialog.quickValue) {
       ui.quickTitle.value = '';
@@ -824,11 +875,15 @@ async function submitTaskDialog(event) {
     render();
     showCreatedToast(task, dialog.mode === 'edit' ? 'updated' : 'added');
   } catch (error) {
-    failed = true;
-    setDialogError(error.message);
+    if (!isAuthReloadPending()) {
+      failed = true;
+      setDialogError(error.message);
+    }
   } finally {
-    setDialogBusy(false);
-    if (failed && ui.taskDialog.open) ui.saveTask.focus();
+    if (!isAuthReloadPending()) {
+      setDialogBusy(false);
+      if (failed && ui.taskDialog.open) ui.saveTask.focus();
+    }
   }
 }
 
@@ -845,12 +900,14 @@ async function toggleTask(id, completed, control) {
   }
   try {
     const updated = await apiRequest('PATCH', taskPath(id), { completed }, (value) => isTask(value) && value.id === id && value.completed === completed);
+    if (isAuthReloadPending()) return;
     replaceTask(updated);
     state.pending.delete(id);
     render();
     if (hadFocus && document.activeElement === document.body && !ui.taskDialog.open && !ui.deleteDialog.open) focusTaskControl(id, 'toggle');
     showToast(completed ? 'Task completed. Nice work.' : 'Task moved back to your list.');
   } catch (error) {
+    if (isAuthReloadPending()) return;
     state.pending.delete(id);
     render();
     if (hadFocus && document.activeElement === document.body && !ui.taskDialog.open && !ui.deleteDialog.open) focusTaskControl(id, 'toggle');
@@ -887,17 +944,22 @@ async function confirmDelete() {
   let failed = false;
   try {
     await apiRequest('DELETE', taskPath(id));
+    if (isAuthReloadPending()) return;
     state.tasks = state.tasks.filter((task) => task.id !== id);
     ui.deleteDialog.close();
     render();
     showToast('Task deleted.');
   } catch (error) {
-    failed = true;
-    ui.deleteError.textContent = error.message;
-    ui.deleteError.hidden = false;
+    if (!isAuthReloadPending()) {
+      failed = true;
+      ui.deleteError.textContent = error.message;
+      ui.deleteError.hidden = false;
+    }
   } finally {
-    setDeleteBusy(false);
-    if (failed && ui.deleteDialog.open) ui.confirmDelete.focus();
+    if (!isAuthReloadPending()) {
+      setDeleteBusy(false);
+      if (failed && ui.deleteDialog.open) ui.confirmDelete.focus();
+    }
   }
 }
 

@@ -44,6 +44,10 @@ test('PostgreSQL persists data and enforces task ownership', {
     await store.createSession({ tokenHash: 'only-a-hash', userId: idA, expiresAt: '2099-01-01T00:00:00.000Z' });
     assert.equal((await store.getUserBySession('only-a-hash', new Date().toISOString())).id, idA);
     assert.equal(await store.getUserBySession('only-a-hash', '2100-01-01T00:00:00.000Z'), null);
+    await store.createSession({ tokenHash: 'batch-a', userId: idA, expiresAt: '2099-01-01T00:00:00.000Z' });
+    await store.createSession({ tokenHash: 'batch-b', userId: idB, expiresAt: '2099-01-01T00:00:00.000Z' });
+    assert.equal(await store.deleteSessions(['batch-a', 'batch-b']), 2);
+    assert.equal(await store.getUserBySession('batch-a', new Date().toISOString()), null);
     assert.equal((await store.finishOnboarding(idA)).onboarded, true);
     const reopenedStore = await createStore(client);
     assert.equal((await reopenedStore.get(idA, original.id)).title, 'Updated');
