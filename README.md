@@ -19,7 +19,9 @@ You need Docker and Docker Compose. From this directory on your own machine:
 
 The app listens on the host's loopback interface by default. PostgreSQL is on the private Compose network and is not published to the host; the application uses a separate, non-superuser database role. `docker compose down` stops the stack without deleting the named database volume. Removing that volume deletes all accounts and tasks: back it up first. You can back up the database with `docker compose exec -T db pg_dump -U hype_admin hype_todo > hype-backup.sql`; the backup contains private data and password hashes, so protect it appropriately.
 
-Postgres creates its admin and application roles during initial database setup. Changing either password in `.env` later does not update an existing volume; rotate the corresponding database role's password explicitly as well as updating `.env`.
+Postgres creates its admin role during initial database setup. After PostgreSQL is healthy, a separate `db-init` service runs the application-role setup explicitly with `/bin/sh`, so it works even when host bind mounts cannot be executed directly. The app starts only after that setup succeeds. Setup can safely run again: it creates a missing application role and grants its database/schema permissions without deleting data or changing an existing role's password. This also repairs volumes left partially initialized by an earlier failed startup; run `docker compose up --build -d` again.
+
+Changing either password in `.env` does not update an existing database role; rotate the corresponding role's password explicitly as well as updating `.env`. The app receives only its application credentials; admin credentials are used by PostgreSQL and the setup service.
 
 ## Run locally without Docker
 
@@ -28,6 +30,16 @@ Use Node.js 24 or later and a PostgreSQL database. Install dependencies with `np
 ## Tests
 
 `npm test` runs the HTTP, authentication, authorization, input-validation, and password-hashing tests using an in-memory test store. A separate PostgreSQL integration test is skipped unless `TEST_DATABASE_URL` points to a disposable PostgreSQL database whose user can create schemas. Set it to run `npm test` against PostgreSQL too. That test creates a unique temporary schema and removes only that schema afterward. Docker and browser tests should also be run in an environment where Docker is available.
+
+To test role setup and recovery with an isolated disposable PostgreSQL cluster (no existing database is touched), run:
+
+```sh
+docker run --rm --user postgres --tmpfs /tmp:rw,exec \
+  --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
+  postgres:17-alpine sh /workspace/test/bootstrap.test.sh
+```
+
+This regression test covers an initialized database with a missing app role, quoted passwords, repeated setup, preserved task data/credentials, and rejected empty passwords. It invokes the mounted script through `sh`, as Compose does.
 
 ## Security and deployment notes
 

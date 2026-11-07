@@ -15,8 +15,8 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
     depends_on:
-      db:
-        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     read_only: true
     cap_drop:
       - ALL
@@ -24,16 +24,38 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
 
+  # Runs for fresh and existing volumes, outside Postgres's first-run entrypoint.
+  db-init:
+    image: postgres:17-alpine
+    user: postgres
+    entrypoint: ["/bin/sh", "/bootstrap/init-app-user.sh"]
+    environment:
+      PGHOST: db
+      PGPORT: "5432"
+      POSTGRES_USER: hype_admin
+      POSTGRES_DB: hype_todo
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env before starting}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env before starting}
+    volumes:
+      - ./docker/init-app-user.sh:/bootstrap/init-app-user.sh:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
   db:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: hype_admin
       POSTGRES_DB: hype_todo
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env before starting}
-      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env before starting}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./docker/init-app-user.sh:/docker-entrypoint-initdb.d/10-init-app-user.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U hype_admin -d hype_todo"]
       interval: 5s
