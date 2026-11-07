@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0d0f0d">
+  <title>HYPE — Make space for what matters</title>
+  <meta name="description" content="A focused space for the things that matter.">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d1ff6a'/%3E%3Cpath fill='%2317200f' d='M6 5h6v7h8V5h6v22h-6v-8h-8v8H6z'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/auth.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body class="auth-pending">
+  <div id="auth-root"></div>
+  <a class="skip-link" href="#tasks-heading">Skip to tasks</a>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Dashboard sidebar">
+      <a class="brand" href="/" aria-label="HYPE home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none"><path fill="currentColor" d="M3 3h8.5v8.5h9V3H29v26h-8.5v-9h-9v9H3V3Z"/></svg>
+        </span>
+        <span class="brand-word">HYPE<span>.</span></span>
+      </a>
+      <p class="brand-caption">MAKE SPACE FOR MOMENTUM</p>
+
+      <div class="sidebar-section">
+        <p class="sidebar-label">WORKSPACE</p>
+        <nav class="side-nav" aria-label="Task views">
+          <button class="side-link" type="button" data-view="all" aria-pressed="true">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="4" width="7" height="7" rx="1.5"/><rect x="13.5" y="4" width="7" height="7" rx="1.5"/><rect x="3.5" y="14" width="7" height="7" rx="1.5"/><rect x="13.5" y="14" width="7" height="7" rx="1.5"/></svg>
+            <span>All tasks</span><span class="side-count" data-view-count="all" aria-hidden="true">—</span>
+          </button>
+          <button class="side-link" type="button" data-view="today" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M7.5 3v4M16.5 3v4M3.5 9.5h17M8 13.5h.01M12 13.5h.01M16 13.5h.01M8 17h.01M12 17h.01"/></svg>
+            <span>Today</span><span class="side-count" data-view-count="today" aria-hidden="true">—</span>
+          </button>
+          <button class="side-link" type="button" data-view="upcoming" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5l3.5 2"/></svg>
+            <span>Upcoming</span><span class="side-count" data-view-count="upcoming" aria-hidden="true">—</span>
+          </button>
+          <button class="side-link" type="button" data-view="completed" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m8 12 2.8 2.8L16.5 9"/></svg>
+            <span>Completed</span><span class="side-count" data-view-count="completed" aria-hidden="true">—</span>
+          </button>
+        </nav>
+      </div>
+
+      <div class="sidebar-section project-section">
+        <div class="sidebar-label-row"><p class="sidebar-label">PROJECTS</p><span class="tiny-star" aria-hidden="true">✳</span></div>
+        <nav class="side-nav" aria-label="Filter by project">
+          <button class="side-link project-link" type="button" data-project="all" aria-pressed="true">
+            <span class="project-glyph project-glyph-all" aria-hidden="true"></span><span>All projects</span><span class="side-count" data-project-count="all" aria-hidden="true">—</span>
+          </button>
+          <button class="side-link project-link" type="button" data-project="Personal" aria-pressed="false">
+            <span class="project-glyph project-glyph-personal" aria-hidden="true"></span><span>Personal</span><span class="side-count" data-project-count="Personal" aria-hidden="true">—</span>
+          </button>
+          <button class="side-link project-link" type="button" data-project="Work" aria-pressed="false">
+            <span class="project-glyph project-glyph-work" aria-hidden="true"></span><span>Work</span><span class="side-count" data-project-count="Work" aria-hidden="true">—</span>
+          </button>
+          <button class="side-link project-link" type="button" data-project="Ideas" aria-pressed="false">
+            <span class="project-glyph project-glyph-ideas" aria-hidden="true"></span><span>Ideas</span><span class="side-count" data-project-count="Ideas" aria-hidden="true">—</span>
+          </button>
+        </nav>
+      </div>
+
+      <div class="sidebar-bottom">
+        <div class="sidebar-note" aria-hidden="true">
+          <span class="note-spark">✳</span>
+          <p>Less noise.<br><strong>More momentum.</strong></p>
+          <span class="note-line"></span>
+        </div>
+        <p class="sidebar-foot">A LITTLE BETTER, EVERY DAY <span>↗</span></p>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div class="breadcrumb" aria-label="Current location"><span>YOUR SPACE</span><span class="breadcrumb-divider">/</span><strong>Dashboard</strong></div>
+        <a class="brand mobile-brand" href="/" aria-label="HYPE home">
+          <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path fill="currentColor" d="M3 3h8.5v8.5h9V3H29v26h-8.5v-9h-9v9H3V3Z"/></svg></span>
+          <span class="brand-word">HYPE<span>.</span></span>
+        </a>
+        <div class="topbar-actions">
+          <div class="search-control">
+            <label class="search-box" for="search-input">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.6"/><path d="m16 16 4 4"/></svg>
+              <span class="sr-only">Search tasks</span>
+              <input id="search-input" type="search" placeholder="Search your tasks" autocomplete="off">
+              <span class="search-shortcut" aria-hidden="true">/</span>
+            </label>
+            <button id="clear-search" class="clear-search" type="button" aria-label="Clear search" title="Clear search" hidden>
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+            </button>
+          </div>
+          <div class="sync-status" role="status" aria-live="polite"><span id="sync-dot" class="sync-dot" data-state="loading" aria-hidden="true"></span><span id="sync-text">Connecting</span></div>
+          <div class="account-chip"><span class="account-name" data-user-name></span><button class="account-sign-out" type="button" data-sign-out>Sign out</button></div>
+          <button id="new-task" class="button button-primary top-new" type="button" disabled>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>New task</span>
+          </button>
+        </div>
+      </header>
+
+      <main id="main-content" class="main-content">
+        <section class="overview" aria-labelledby="greeting">
+          <div class="welcome">
+            <div class="eyebrow date-eyebrow"><span class="eyebrow-dot"></span><time id="today-date">TODAY</time><span class="eyebrow-rule"></span><span class="welcome-kicker">YOUR DAILY SPACE</span></div>
+            <h1 id="greeting"><span id="greeting-text">Welcome</span><span class="headline-period">.</span></h1>
+            <p id="welcome-copy" class="welcome-copy">A little space to bring your plans to life.</p>
+            <div class="overview-stats" aria-label="Task overview">
+              <div class="overview-stat"><span class="stat-number" id="open-count">—</span><span class="stat-label">Open tasks</span></div>
+              <span class="stat-divider" aria-hidden="true"></span>
+              <div class="overview-stat"><span class="stat-number" id="today-count">—</span><span class="stat-label" aria-label="Open tasks due today">Due today</span></div>
+              <span class="stat-divider" aria-hidden="true"></span>
+              <div class="overview-stat"><span class="stat-number" id="completed-count">—</span><span class="stat-label">Completed</span></div>
+            </div>
+          </div>
+
+          <div class="momentum-card">
+            <div class="momentum-top"><span class="card-kicker">YOUR MOMENTUM</span><span class="momentum-spark" aria-hidden="true">✳</span></div>
+            <div class="momentum-content">
+              <div class="momentum-copy"><h2>Every step<br>counts<span>.</span></h2><p id="progress-detail">Your progress will show up here.</p></div>
+              <div id="progress-ring" class="progress-ring" role="img" aria-label="Progress unavailable">
+                <div class="progress-ring-inner"><strong id="progress-percent">—</strong><span>DONE</span></div>
+              </div>
+            </div>
+            <div class="momentum-footer"><span>OVERALL PROGRESS</span><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 19 19 5M8 5h11v11"/></svg></div>
+          </div>
+        </section>
+
+        <section class="task-section" aria-labelledby="tasks-heading">
+          <div class="section-heading-row">
+            <div>
+              <p class="section-kicker"><span>✳</span> THE LIST</p>
+              <div class="section-title-line"><h2 id="tasks-heading" tabindex="-1">All tasks</h2><span class="task-total" id="visible-count" aria-label="Task count unavailable">—</span></div>
+              <p class="section-description" id="view-description">Everything you want to make happen, in one place.</p>
+            </div>
+            <div class="project-select-wrap">
+              <label for="project-filter">PROJECT</label>
+              <div class="select-shell"><select id="project-filter" aria-label="Filter tasks by project"><option value="all">All projects</option><option value="Personal">Personal</option><option value="Work">Work</option><option value="Ideas">Ideas</option></select><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></div>
+            </div>
+          </div>
+
+          <div class="task-tabs" role="group" aria-label="Filter by task view">
+            <button type="button" class="task-tab" data-view="all" aria-pressed="true">All tasks</button>
+            <button type="button" class="task-tab" data-view="today" aria-pressed="false">Today</button>
+            <button type="button" class="task-tab" data-view="upcoming" aria-pressed="false">Upcoming</button>
+            <button type="button" class="task-tab" data-view="completed" aria-pressed="false">Completed</button>
+          </div>
+
+          <form id="quick-form" class="quick-form" novalidate>
+            <div class="quick-inner">
+              <span class="capture-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14"/></svg></span>
+              <label class="sr-only" for="quick-title">Quick add task title</label>
+              <input id="quick-title" name="title" type="text" placeholder="Add something to your list..." autocomplete="off" aria-describedby="quick-help quick-error" required disabled>
+              <div class="capture-actions">
+                <button id="quick-details" class="button button-quiet" type="button" disabled>Details <span aria-hidden="true">↗</span></button>
+                <button id="quick-submit" class="button button-primary capture-submit" type="submit" disabled><span>Add task</span><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+              </div>
+            </div>
+            <p id="quick-error" class="field-error" role="alert" hidden></p>
+          </form>
+          <div class="quick-caption"><p id="quick-help">Quick add uses Medium priority and no due date. Choose Details for more.</p><span aria-hidden="true">A LITTLE PROGRESS IS STILL PROGRESS ↗</span></div>
+
+          <div id="task-list-region" class="task-list-region" aria-busy="true">
+            <div class="loading-state" role="status"><span class="loading-orbit" aria-hidden="true"></span><span>Getting your tasks ready...</span></div>
+          </div>
+          <p id="results-announcement" class="sr-only" role="status" aria-live="polite"></p>
+        </section>
+        <footer class="main-footer"><span>YOUR SPACE TO MAKE THINGS HAPPEN.</span><span>MADE FOR MOMENTUM <span aria-hidden="true">✳</span></span></footer>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="task-dialog" class="dialog" aria-labelledby="dialog-title" aria-describedby="dialog-description">
+    <div class="dialog-inner">
+      <div class="dialog-header">
+        <div><p class="section-kicker"><span>✳</span> <span id="dialog-kicker">NEW TASK</span></p><h2 id="dialog-title">Make it happen.</h2><p id="dialog-description">Give your idea a little structure.</p></div>
+        <button type="button" class="icon-button dialog-close" id="close-task-dialog" aria-label="Close task dialog"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <form id="task-form" novalidate>
+        <div class="form-field">
+          <label for="task-title">Task name <span class="required-mark">*</span></label>
+          <input id="task-title" name="title" type="text" placeholder="What do you want to get done?" autocomplete="off" required aria-describedby="dialog-error">
+        </div>
+        <div class="form-field">
+          <label for="task-notes">Notes <span class="optional">OPTIONAL</span></label>
+          <textarea id="task-notes" name="notes" rows="3" placeholder="Add a few details..."></textarea>
+        </div>
+        <div class="form-grid">
+          <div class="form-field"><label for="task-project">Project</label><div class="form-select"><select id="task-project" name="project" aria-describedby="dialog-error"><option value="Personal">Personal</option><option value="Work">Work</option><option value="Ideas">Ideas</option></select><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></div></div>
+          <div class="form-field"><label for="task-priority">Priority</label><div class="form-select"><select id="task-priority" name="priority" aria-describedby="dialog-error"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></div></div>
+        </div>
+        <div class="form-field date-field"><label for="task-due">Due date <span class="optional">OPTIONAL</span></label><input id="task-due" name="dueDate" type="date" aria-describedby="dialog-error"></div>
+        <p id="dialog-error" class="field-error dialog-error" role="alert" hidden></p>
+        <div class="dialog-actions"><button type="button" id="cancel-task-dialog" class="button button-secondary">Cancel</button><button type="submit" id="save-task" class="button button-primary">Create task <span aria-hidden="true">↗</span></button></div>
+      </form>
+    </div>
+  </dialog>
+
+  <dialog id="delete-dialog" class="dialog delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-description delete-task-name">
+    <div class="dialog-inner">
+      <div class="delete-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M9 7V4.5h6V7m3 0-.8 12a1.5 1.5 0 0 1-1.5 1.4H8.3A1.5 1.5 0 0 1 6.8 19L6 7m4 3.5v6m4-6v6"/></svg></div>
+      <h2 id="delete-title">Delete this task?</h2>
+      <p id="delete-description">This can’t be undone.</p>
+      <p id="delete-task-name" class="delete-task-name"></p>
+      <p id="delete-error" class="field-error" role="alert" hidden></p>
+      <div class="dialog-actions"><button id="cancel-delete" class="button button-secondary" type="button">Keep task</button><button id="confirm-delete" class="button button-danger" type="button">Delete task</button></div>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" hidden>
+    <span class="toast-icon" aria-hidden="true">✳</span><span id="toast-message" role="status" aria-live="polite"></span>
+    <button id="toast-action" type="button" hidden>Show all</button><button id="dismiss-toast" type="button" aria-label="Dismiss notification">×</button>
+  </div>
+  <noscript><div class="noscript-notice">HYPE needs JavaScript to connect to your tasks. Please enable it and reload.</div></noscript>
+</body>
+</html>

@@ -1,0 +1,46 @@
+services:
+  app:
+    build: .
+    image: hype_todo:latest
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3000"
+      PGHOST: db
+      PGPORT: "5432"
+      PGUSER: hype_app
+      PGDATABASE: hype_todo
+      PGPASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env before starting}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: hype_admin
+      POSTGRES_DB: hype_todo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env before starting}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env before starting}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-app-user.sh:/docker-entrypoint-initdb.d/10-init-app-user.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U hype_admin -d hype_todo"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
